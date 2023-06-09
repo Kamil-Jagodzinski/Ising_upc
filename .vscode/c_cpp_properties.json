@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${default}",
+                "/opt/nfs/mpich-3.2/include",
+                "/opt/nfs/mpe2-2.4.9b/include",
+                "/home/nfs/berkeley_upcxx-2023.3.0/include/upcxx/"
+            ],
+            "defines": [],
+            "compilerPath": "/home/nfs/berkeley_upcxx-2023.3.0/bin/upcxx",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}
