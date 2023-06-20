@@ -1,22 +1,34 @@
 #include "utils.h"
+#include <upcxx/upcxx.hpp>
 
 upcxx::global_ptr<int> initializeGrid(int grid_size) {
     upcxx::global_ptr<int> grid = nullptr;
     if (upcxx::rank_me() == 0) {
-        // Inicjalizacja siatki spinów tylko na procesie o ranku 0
+        // Initialize spin grid only on process with rank 0
         grid = upcxx::new_array<int>(grid_size * grid_size);
         int* local_grid = grid.local();
         
-        // Wypełnienie siatki spinów jedynkami
+        // Fill the spin grid with ones
         for (int i = 0; i < grid_size * grid_size; i++) {
             local_grid[i] = 1;
         }
     }
     
-    // Broadcast siatki spinów do wszystkich procesów
+    // Broadcast spin grid to all processes
     grid = upcxx::broadcast(grid, 0).wait();
     
     return grid;
+}
+
+int* generateSpins(int rows_per_proc, int row_size, int rank) {
+    int* spins = new int[rows_per_proc * row_size] ;
+
+    for (int i = 0; i < rows_per_proc; i++) {
+        for (int j = 0; j < row_size; j++) {
+            spins[i * row_size + j] = 1;
+        }
+    }
+    return spins;
 }
 
 void printVector2D(const upcxx::global_ptr<int>& grid, int grid_size) {
@@ -82,23 +94,19 @@ double energy(const upcxx::global_ptr<int>& grid, double J, double B, int row_si
 }
 
 void flipSpin(upcxx::global_ptr<int>& grid, int idx) {
-    int* local_grid = grid.local();
-    local_grid[idx] = (local_grid[idx] == 0) ? 1 : 0;
+    int grid_idx_value = upcxx::rget(grid + idx).wait();
+    (grid_idx_value == 0 )? upcxx::rput(1, grid+idx) : upcxx::rput(0, grid+idx);
 }
 
 double avgMagnetism(const upcxx::global_ptr<int>& spinArray, int spinArraySize) {
     double sum = 0.0;
-
-    upcxx::rput(0.0, sum).wait();
-    upcxx::barrier();
 
     for (int i = 0; i < spinArraySize; i++) {
         int spin = upcxx::rget(spinArray + i).wait();
         sum += spin;
     }
 
-    double global_sum = upcxx::reduce_one(sum, upcxx::op_fast_add, 0).wait();
-    double avg = global_sum / spinArraySize;
+    double avg = sum / spinArraySize;
 
     return avg;
 }
@@ -107,7 +115,7 @@ void saveGrid(const upcxx::global_ptr<int>& grid, int row_size, std::string fold
     char filename[256];
     const char* cstr = folderName.c_str();
     sprintf(filename, "%s/spins.txt", cstr);
-    upcxx::global_ptr<FILE> fp = nullptr;
+    FILE* fp = nullptr;
 
     if (upcxx::rank_me() == 0) {
         fp = fopen(filename, "a");
@@ -124,19 +132,19 @@ void saveGrid(const upcxx::global_ptr<int>& grid, int row_size, std::string fold
             int spin = upcxx::rget(grid + i * row_size + j).wait();
 
             if (upcxx::rank_me() == 0) {
-                fprintf(fp.local(), "%d ", spin);
+                fprintf(fp, "%d ", spin);
             }
         }
 
         if (upcxx::rank_me() == 0) {
-            fprintf(fp.local(), "\n");
+            fprintf(fp, "\n");
         }
     }
 
     upcxx::barrier();
 
     if (upcxx::rank_me() == 0) {
-        fclose(fp).wait();
+        fclose(fp);
     }
 }
 

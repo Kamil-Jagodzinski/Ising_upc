@@ -23,6 +23,8 @@ double single_spin_energy(int index, const upcxx::global_ptr<int>& grid, int row
 
 double energy(const upcxx::global_ptr<int>& grid, double J, double B, int row_size);
 
+int* generateSpins(int rows_per_proc, int row_size, int rank);
+
 void flipSpin(upcxx::global_ptr<int>& grid, int idx);
 
 double avgMagnetism(const upcxx::global_ptr<int>& spinArray, int spinArraySize);

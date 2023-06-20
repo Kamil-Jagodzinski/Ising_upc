@@ -1,171 +1,126 @@
 #include "utils.h"
+#include <upcxx/upcxx.hpp>
+#include <random>
+#include <cmath>
+#include <climits>
+#include <algorithm>
 
-void runProgram(int rank, int num_procs, int grid_size, double J,
+int sys_retval;
+
+void runProgram(int rank, int num_procs, int grid_size, double J, 
                 double B, long long iterations, long long repeat);
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     upcxx::init();
 
     int rank = upcxx::rank_me();
     int num_procs = upcxx::rank_n();
-
-    int grid_size;
-    double J, B;
+    
+    int grid_size; 
+    double J, B; 
     long long iterations, repeat;
     bool stay_in_GUI = true;
-    readParametersFromFile(grid_size, J, B, iterations, repeat);
 
-    if (rank == 0) {
-        while (true && stay_in_GUI) {
-            std::cout << "====================================================" << std::endl;
-            std::cout << "||         SELECT ACTION FROM LIST BELOW:         ||" << std::endl;
-            std::cout << "|| 1. Change grid_size      4. Change iterations  ||" << std::endl;
-            std::cout << "|| 2.     Change J          5.   Change repeat    ||" << std::endl;
-            std::cout << "|| 3.     Change B          6.    Run program     ||" << std::endl;
-            std::cout << "||                                                ||" << std::endl;
-            std::cout << "||                                                ||" << std::endl;
-            std::cout << "====================================================" << std::endl;
-            std::cout << "                Currently set parameters:" << std::endl;
-            std::cout << "grid_size = " << grid_size << ",\t J = " << J << ",\t B = " << B
-                      << ",\niterations = " << iterations << ",\nrepeat = " << repeat << std::endl;
+    // Assuming this function is adjusted to work with UPC++ as necessary
+    readParametersFromFile( grid_size, J, B, iterations, repeat);
 
-            std::cout << "\n>>  Choose option: \n>>";
-
-            int option;
-            std::cin >> option;
-
-            switch (option) {
-                case 1:
-                    system("clear");
-                    std::cout << "Enter new Net Size: ";
-                    while (!(std::cin >> grid_size) || grid_size <= 0) {
-                        std::cout << "Invalid input. Please enter a positive integer for Net Size: ";
-                        std::cin.clear();
-                        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    }
-                    saveParametersToFile(grid_size, J, B, iterations, repeat);
-                    break;
-                case 2:
-                    system("clear");
-                    std::cout << "Enter new J (-1 to 1): ";
-                    while (!(std::cin >> J) || J < -1 || J > 1) {
-                        std::cout << "Invalid input. Please enter a value between -1 and 1 for J: ";
-                        std::cin.clear();
-                        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    }
-                    saveParametersToFile(grid_size, J, B, iterations, repeat);
-                    break;
-                case 3:
-                    system("clear");
-                    std::cout << "Enter new B (-1 to 1): ";
-                    while (!(std::cin >> B) || B < -1 || B > 1) {
-                        std::cout << "Invalid input. Please enter a value between -1 and 1 for B: ";
-                        std::cin.clear();
-                        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    }
-                    saveParametersToFile(grid_size, J, B, iterations, repeat);
-                    break;
-                case 4:
-                    system("clear");
-                    std::cout << "Enter new iterations: ";
-                    while (!(std::cin >> iterations) || iterations <= 0) {
-                        std::cout << "Invalid input. Please enter a positive integer for iterations: ";
-                        std::cin.clear();
-                        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    }
-                    saveParametersToFile(grid_size, J, B, iterations, repeat);
-                    break;
-                case 5:
-                    system("clear");
-                    std::cout << "Enter new repeat: ";
-                    while (!(std::cin >> repeat) || repeat <= 0) {
-                        std::cout << "Invalid input. Please enter a positive integer for repeat: ";
-                        std::cin.clear();
-                        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    }
-                    saveParametersToFile(grid_size, J, B, iterations, repeat);
-                    break;
-                case 6:
-                    system("clear");
-                    std::cout << "Running the program" << std::endl;
-                    stay_in_GUI = false;
-                    break;
-                default:
-                    std::cout << "Invalid option" << std::endl;
-                    break;
-            }
-        }
-    }
-
+    // Ensure all other processes wait until GUI session is done
     upcxx::barrier();
 
+    // Run the computations
     runProgram(rank, num_procs, grid_size, J, B, iterations, repeat);
-
+    
+    // Finalize program
     upcxx::finalize();
     return 0;
 }
 
-void runProgram(int rank, int num_procs, int grid_size, double J,
-                double B, long long iterations, long long repeat) {
+
+
+void runProgram(int rank, int num_procs, int grid_size, double J, double B, long long iterations, long long repeat) {
+
+    
+    // Initialization
     int row_size = grid_size;
     int iters = iterations;
-    int rows_per_proc = row_size / num_procs;
+    int rows_per_proc = row_size/num_procs;
     std::string dir_name;
-    std::mt19937 gen(rank);
+    std::mt19937 gen(rank); 
     std::uniform_real_distribution<double> dis(0.0, 1.0);
     std::uniform_int_distribution<int> disInt(0, INT_MAX);
+    upcxx::global_ptr<int> myGlobalPtr = upcxx::new_array<int>(grid_size * grid_size);
+    if(rank == 0){
+        for(int i=0; i<grid_size; i++){
+            for(int j=0; j<grid_size; j++){
+                upcxx::rput(1, myGlobalPtr + (i * j) + j).wait();
+            }
+        }
+    }
 
-    for (int rep = 0; rep < repeat; rep++) {
-        if (rank == 0) {
+    // Using UPC++ dist_object to communicate the variables between ranks
+    upcxx::dist_object<int> d_grid_size(grid_size);
+    upcxx::dist_object<double> d_J(J);
+    upcxx::dist_object<double> d_B(B);
+    upcxx::dist_object<long long> d_iterations(iterations);
+    upcxx::dist_object<long long> d_repeat(repeat);
+
+    
+    for(int rep=0; rep<repeat; rep++){
+        if(rank == 0){
             dir_name = createFolderWithTimestampName(rep);
-            if (dir_name == "ERROR") {
-                std::cout << "ERROR during creating dir" << std::endl;
-                return;
+            if ( dir_name == "ERROR" ){
+               std::cout << "ERROR during creating dir" << std::endl;
+                return ;
             }
         }
+    
+        // Broadcast using upcxx::broadcast and wait for it to complete
+        J = upcxx::broadcast(*d_J, 0).wait();
+        B = upcxx::broadcast(*d_B, 0).wait();
+        grid_size = upcxx::broadcast(*d_grid_size, 0).wait();
+        iterations = upcxx::broadcast(*d_iterations, 0).wait();
+        repeat = upcxx::broadcast(*d_repeat, 0).wait();
+        upcxx::broadcast(&myGlobalPtr, 1, 0).wait();
+        upcxx::global_ptr<int> sharedPtr = myGlobalPtr;  // Use the obtained value
 
-        upcxx::global_ptr<int> cluster = upcxx::new_array<int>(row_size * rows_per_proc);
-        upcxx::global_ptr<int> recv_buffer = upcxx::new_array<int>(row_size * row_size);
-
-        upcxx::barrier();
-
-        upcxx::broadcast(&J, 1, 0).wait();
-        upcxx::broadcast(&B, 1, 0).wait();
-        upcxx::broadcast(&grid_size, 1, 0).wait();
-        upcxx::broadcast(&iterations, 1, 0).wait();
-        upcxx::broadcast(&repeat, 1, 0).wait();
-
-        for (int i = 0; i < iters + num_procs; i += num_procs) {
-            int idx = disInt(gen) % (rows_per_proc * row_size) + rank * rows_per_proc * row_size;
-
-            double delta = upcxx::rpc(rank, calculateEnergyChange, recv_buffer, idx, row_size,
-                                      rows_per_proc, num_procs).wait();
-            double p = 0.0;
-
-            if (delta < 0.0) {
-                p = 1.0;
-            } else {
-                p = std::exp(-delta / J);
+        for(int i=0; i<row_size; i++){
+            for(int j=0; j<row_size; j++){
+                int val = upcxx::rget(myGlobalPtr + (i * j) + j).wait();
+                std::cout << val << " ";
             }
+            std::cout << std::endl;
+        }  
 
-            double rnd = dis(gen);
 
-            if (rnd < p) {
-                upcxx::rpc(rank, flipSpin, recv_buffer, idx, row_size,
-                           rows_per_proc, num_procs).wait();
-            }
+        // ----------------------------- DO ZROBIENIA --------------------------------
 
-            if (i % num_procs == 0) {
-                upcxx::barrier();
-                if (rank == 0) {
-                    saveSpinToFile(recv_buffer, row_size, i / num_procs, dir_name);
-                }
-            }
-        }
 
-        upcxx::delete_array(cluster);
-        upcxx::delete_array(recv_buffer);
+        // int* recv_buffer = new int[rows_per_proc * row_size];
+        // recv_buffer = grid.local() + rank * rows_per_proc * row_size;
 
-        upcxx::barrier();
+        // for(int i=0; i<iters+num_procs; i+=num_procs) {
+        //     int idx = disInt(gen) % (rows_per_proc * row_size) + rank * rows_per_proc * row_size;
+        //     double delta = calculateEnergyChange(grid, idx, row_size, rows_per_proc, num_procs);
+        //     double p = (delta < 0.0) ? 1.0 : exp(-delta);
+
+        //     if(dis(gen) < p) {
+        //         flipSpin(grid, idx);
+        //     }
+
+        //     // upcxx::rput(recv_buffer, grid + rank * rows_per_proc * row_size, rows_per_proc * row_size).wait();
+
+        //     // Save data
+        //     if(rank == 0 && (i == iters-1 || i%(iters/10) < num_procs)) {
+        //         saveGrid(grid, row_size, dir_name);
+        //     }
+
+        //     if(rank == 0 && (i == iters-1 || i%(iters/100) < num_procs)) {
+        //         saveEnergy(energy(grid, J, B, row_size), dir_name);
+        //         saveMag(avgMagnetism(grid, row_size * rows_per_proc * num_procs), dir_name);
+        //     }
+        // }
+
+        // // Cleanup
+        // upcxx::delete_(grid);
     }
 }
