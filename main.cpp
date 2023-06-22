@@ -52,7 +52,7 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
     if(rank == 0){
         for(int i=0; i<grid_size; i++){
             for(int j=0; j<grid_size; j++){
-                upcxx::rput(1, myGlobalPtr + (i * j) + j).wait();
+                upcxx::rput(1, myGlobalPtr + (i * row_size) + j).wait();
             }
         }
     }
@@ -81,46 +81,55 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
         iterations = upcxx::broadcast(*d_iterations, 0).wait();
         repeat = upcxx::broadcast(*d_repeat, 0).wait();
         upcxx::broadcast(&myGlobalPtr, 1, 0).wait();
-        upcxx::global_ptr<int> sharedPtr = myGlobalPtr;  // Use the obtained value
 
-        for(int i=0; i<row_size; i++){
-            for(int j=0; j<row_size; j++){
-                int val = upcxx::rget(myGlobalPtr + (i * j) + j).wait();
-                std::cout << val << " ";
+
+        upcxx::barrier();
+
+
+        // Run the simulation
+
+        for(int i=0; i<iters+num_procs; i+=num_procs) {
+            int idx = disInt(gen) % (rows_per_proc * row_size) + rank * rows_per_proc * row_size;
+
+            double delta = calculateEnergyChange(myGlobalPtr, idx, row_size, rows_per_proc, num_procs).wait();
+            double p = (delta < 0.0) ? 1.0 : exp(-delta);
+
+
+            if( dis(gen) < p ){
+                (upcxx::rget(myGlobalPtr+idx).wait() == 0) ? upcxx::rput(1, myGlobalPtr + idx).wait() : upcxx::rput(0, myGlobalPtr + idx).wait();
+                if(rank == 0){
+                    for(int i=0; i<grid_size; i++){
+                        for(int j=0; j<grid_size; j++){
+                            std::cout << upcxx::rget(myGlobalPtr + (i * row_size) + j).wait() << " ";
+                        }
+                        std::cout << std::endl;
+                    }
+                }
             }
-            std::cout << std::endl;
-        }  
 
 
-        // ----------------------------- DO ZROBIENIA --------------------------------
+            upcxx::barrier();
+            
+            // Save data
+            if(rank == 0 && (i == iters-1 || i%(iters/10) < num_procs)) {
+                saveGrid(myGlobalPtr, row_size, dir_name);
+            }
 
+            if(rank == 0 && (i == iters-1 || i%(iters/100) < num_procs)) {
+                saveEnergy(energy(myGlobalPtr, J, B, row_size), dir_name);
+                saveMag(avgMagnetism(myGlobalPtr, row_size * rows_per_proc * num_procs), dir_name);
+            }
+        }
 
-        // int* recv_buffer = new int[rows_per_proc * row_size];
-        // recv_buffer = grid.local() + rank * rows_per_proc * row_size;
+        
+    }
 
-        // for(int i=0; i<iters+num_procs; i+=num_procs) {
-        //     int idx = disInt(gen) % (rows_per_proc * row_size) + rank * rows_per_proc * row_size;
-        //     double delta = calculateEnergyChange(grid, idx, row_size, rows_per_proc, num_procs);
-        //     double p = (delta < 0.0) ? 1.0 : exp(-delta);
+    if(rank == 0){
+        std::cout << "Simulation finished" << std::endl;
+    }
 
-        //     if(dis(gen) < p) {
-        //         flipSpin(grid, idx);
-        //     }
-
-        //     // upcxx::rput(recv_buffer, grid + rank * rows_per_proc * row_size, rows_per_proc * row_size).wait();
-
-        //     // Save data
-        //     if(rank == 0 && (i == iters-1 || i%(iters/10) < num_procs)) {
-        //         saveGrid(grid, row_size, dir_name);
-        //     }
-
-        //     if(rank == 0 && (i == iters-1 || i%(iters/100) < num_procs)) {
-        //         saveEnergy(energy(grid, J, B, row_size), dir_name);
-        //         saveMag(avgMagnetism(grid, row_size * rows_per_proc * num_procs), dir_name);
-        //     }
-        // }
-
-        // // Cleanup
-        // upcxx::delete_(grid);
+    // Cleanup
+    if(rank == 0){
+        upcxx::delete_(myGlobalPtr);
     }
 }

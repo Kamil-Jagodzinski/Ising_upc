@@ -45,20 +45,77 @@ void printVector2D(const upcxx::global_ptr<int>& grid, int grid_size) {
     upcxx::barrier();
 }
 
-double calculateEnergyChange(const upcxx::global_ptr<int>& grid, int idx, int row_size, int rows_per_proc, int num_procs) {
-    int left_idx = (idx % row_size != 0) ? idx - 1 : idx + row_size - 1;
-    int right_idx = (idx % row_size != row_size - 1) ? idx + 1 : idx - row_size + 1;
-    int up_idx = (idx >= row_size) ? idx - row_size : idx + rows_per_proc * row_size - row_size;
-    int down_idx = (idx < rows_per_proc * row_size - row_size) ? idx + row_size : idx % row_size;
+upcxx::future<double> calculateEnergyChange(const upcxx::global_ptr<int>& grid, int idx, int row_size, int rows_per_proc, int num_procs) {
+    upcxx::future<double> result = upcxx::make_future(0.0);
+    double spin = upcxx::rget(grid + idx).wait() == 1 ? 0.5 : -0.5;
+    int left_idx = idx - 1;
+    int right_idx = idx + 1;
+    int up_idx = idx - row_size;
+    int down_idx = idx + row_size;
 
-    int spin = upcxx::rget(grid + idx).wait() == 1 ? 1 : -1;
-    int left_spin = upcxx::rget(grid + left_idx).wait() == 1 ? 1 : -1;
-    int right_spin = upcxx::rget(grid + right_idx).wait() == 1 ? 1 : -1;
-    int up_spin = upcxx::rget(grid + up_idx).wait() == 1 ? 1 : -1;
-    int down_spin = upcxx::rget(grid + down_idx).wait() == 1 ? 1 : -1;
+    // Calculate left spin
+    result = result.then([=](double energy_change){
+        if (idx % row_size != 0) {
+            return upcxx::rget(grid + left_idx).then([=](int left_val){
+                double left_spin = left_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * left_spin;
+            });
+        } else {
+            return upcxx::rget(grid + idx + row_size - 1).then([=](int left_val){
+                double left_spin = left_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * left_spin;
+            });
+        }
+    });
 
-    return 2.0 * spin * (left_spin + right_spin + up_spin + down_spin);
+    // Calculate right spin
+    result = result.then([=](double energy_change){
+        if (idx % row_size != row_size - 1) {
+            return upcxx::rget(grid + right_idx).then([=](int right_val){
+                double right_spin = right_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * right_spin;
+            });
+        } else {
+            return upcxx::rget(grid + idx - row_size + 1).then([=](int right_val){
+                double right_spin = right_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * right_spin;
+            });
+        }
+    });
+
+    // Calculate up spin
+    result = result.then([=](double energy_change){
+        if (idx >= row_size) {
+            return upcxx::rget(grid + up_idx).then([=](int up_val){
+                double up_spin = up_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * up_spin;
+            });
+        } else {
+            return upcxx::rget(grid + idx + (row_size * rows_per_proc * num_procs) - row_size).then([=](int up_val){
+                double up_spin = up_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * up_spin;
+            });
+        }
+    });
+
+    // Calculate down spin
+    result = result.then([=](double energy_change){
+        if (idx < (row_size * rows_per_proc * num_procs) - row_size) {
+            return upcxx::rget(grid + down_idx).then([=](int down_val){
+                double down_spin = down_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * down_spin;
+            });
+        } else {
+            return upcxx::rget(grid + idx - (row_size * rows_per_proc * num_procs) + row_size).then([=](int down_val){
+                double down_spin = down_val == 1 ? 0.5 : -0.5;
+                return energy_change + 2.0 * spin * down_spin;
+            });
+        }
+    });
+
+    return result;
 }
+
 
 double single_spin_energy(int index, const upcxx::global_ptr<int>& grid, int row_size, double J, double B) {
     int energyNeigh = -2; // Initial value of -2 for binary grid values (0 and 1)
@@ -93,9 +150,8 @@ double energy(const upcxx::global_ptr<int>& grid, double J, double B, int row_si
     return sum;
 }
 
-void flipSpin(upcxx::global_ptr<int>& grid, int idx) {
-    int grid_idx_value = upcxx::rget(grid + idx).wait();
-    (grid_idx_value == 0 )? upcxx::rput(1, grid+idx) : upcxx::rput(0, grid+idx);
+int flipSpin(int* grid, int idx) {
+    return ((grid[idx] == 0) ? 1 : 0);
 }
 
 double avgMagnetism(const upcxx::global_ptr<int>& spinArray, int spinArraySize) {
@@ -117,35 +173,22 @@ void saveGrid(const upcxx::global_ptr<int>& grid, int row_size, std::string fold
     sprintf(filename, "%s/spins.txt", cstr);
     FILE* fp = nullptr;
 
-    if (upcxx::rank_me() == 0) {
-        fp = fopen(filename, "a");
-        if (fp == nullptr) {
-            printf("Error: could not open file for writing.\n");
-            return;
-        }
+    fp = fopen(filename, "a");
+    if (fp == nullptr) {
+        printf("Error: could not open file for writing.\n");
+        return;
     }
-
-    upcxx::barrier();
 
     for (int i = 0; i < row_size; i++) {
         for (int j = 0; j < row_size; j++) {
-            int spin = upcxx::rget(grid + i * row_size + j).wait();
-
-            if (upcxx::rank_me() == 0) {
+                int spin = upcxx::rget(grid + i * row_size + j).wait();
                 fprintf(fp, "%d ", spin);
-            }
         }
-
-        if (upcxx::rank_me() == 0) {
-            fprintf(fp, "\n");
-        }
+        fprintf(fp, "\n");
     }
 
     upcxx::barrier();
-
-    if (upcxx::rank_me() == 0) {
-        fclose(fp);
-    }
+    fclose(fp);
 }
 
 void saveMag(double mg, std::string folderName) {
