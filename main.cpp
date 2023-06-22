@@ -48,14 +48,9 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
     std::mt19937 gen(rank); 
     std::uniform_real_distribution<double> dis(0.0, 1.0);
     std::uniform_int_distribution<int> disInt(0, INT_MAX);
-    upcxx::global_ptr<int> myGlobalPtr = upcxx::new_array<int>(grid_size * grid_size);
-    if(rank == 0){
-        for(int i=0; i<grid_size; i++){
-            for(int j=0; j<grid_size; j++){
-                upcxx::rput(1, myGlobalPtr + (i * row_size) + j).wait();
-            }
-        }
-    }
+    upcxx::global_ptr<int> myGlobalPtr = nullptr;
+
+    
 
     // Using UPC++ dist_object to communicate the variables between ranks
     upcxx::dist_object<int> d_grid_size(grid_size);
@@ -66,6 +61,7 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
 
     
     for(int rep=0; rep<repeat; rep++){
+        
         if(rank == 0){
             dir_name = createFolderWithTimestampName(rep);
             if ( dir_name == "ERROR" ){
@@ -73,21 +69,28 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
                 return ;
             }
         }
-    
+        
+        if(rank == 0){
+            myGlobalPtr = upcxx::new_array<int>(grid_size * grid_size);
+            for(int i=0; i<grid_size; i++){
+                for(int j=0; j<grid_size; j++){
+                    upcxx::rput(1, myGlobalPtr + (i * row_size) + j).wait();
+                }
+            }
+        }
+
         // Broadcast using upcxx::broadcast and wait for it to complete
+        myGlobalPtr = upcxx::broadcast(myGlobalPtr, 0).wait();
         J = upcxx::broadcast(*d_J, 0).wait();
         B = upcxx::broadcast(*d_B, 0).wait();
         grid_size = upcxx::broadcast(*d_grid_size, 0).wait();
         iterations = upcxx::broadcast(*d_iterations, 0).wait();
         repeat = upcxx::broadcast(*d_repeat, 0).wait();
-        upcxx::broadcast(&myGlobalPtr, 1, 0).wait();
-
 
         upcxx::barrier();
 
 
         // Run the simulation
-
         for(int i=0; i<iters+num_procs; i+=num_procs) {
             int idx = disInt(gen) % (rows_per_proc * row_size) + rank * rows_per_proc * row_size;
 
@@ -97,18 +100,7 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
 
             if( dis(gen) < p ){
                 (upcxx::rget(myGlobalPtr+idx).wait() == 0) ? upcxx::rput(1, myGlobalPtr + idx).wait() : upcxx::rput(0, myGlobalPtr + idx).wait();
-                if(rank == 0){
-                    for(int i=0; i<grid_size; i++){
-                        for(int j=0; j<grid_size; j++){
-                            std::cout << upcxx::rget(myGlobalPtr + (i * row_size) + j).wait() << " ";
-                        }
-                        std::cout << std::endl;
-                    }
-                }
             }
-
-
-            upcxx::barrier();
             
             // Save data
             if(rank == 0 && (i == iters-1 || i%(iters/10) < num_procs)) {
@@ -118,12 +110,17 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
             if(rank == 0 && (i == iters-1 || i%(iters/100) < num_procs)) {
                 saveEnergy(energy(myGlobalPtr, J, B, row_size), dir_name);
                 saveMag(avgMagnetism(myGlobalPtr, row_size * rows_per_proc * num_procs), dir_name);
+                std::cout << "Iter: "<< i << std::endl;
             }
+
+
+            upcxx::barrier();
         }
 
         
     }
 
+    upcxx::barrier();
     if(rank == 0){
         std::cout << "Simulation finished" << std::endl;
     }
