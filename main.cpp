@@ -101,18 +101,20 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
             if( dis(gen) < p ){
                 (upcxx::rget(myGlobalPtr+idx).wait() == 0) ? upcxx::rput(1, myGlobalPtr + idx).wait() : upcxx::rput(0, myGlobalPtr + idx).wait();
             }
+            upcxx::barrier();
             
+
             // Save data
             if(rank == 0 && (i == iters-1 || i%(iters/10) < num_procs)) {
                 saveGrid(myGlobalPtr, row_size, dir_name);
             }
+            upcxx::barrier();
+
 
             if(rank == 0 && (i == iters-1 || i%(iters/100) < num_procs)) {
                 saveEnergy(energy(myGlobalPtr, J, B, row_size), dir_name);
                 saveMag(avgMagnetism(myGlobalPtr, row_size * rows_per_proc * num_procs), dir_name);
-                std::cout << "Iter: "<< i << std::endl;
             }
-
 
             upcxx::barrier();
         }

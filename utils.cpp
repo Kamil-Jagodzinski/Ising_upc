@@ -187,7 +187,6 @@ void saveGrid(const upcxx::global_ptr<int>& grid, int row_size, std::string fold
         fprintf(fp, "\n");
     }
 
-    upcxx::barrier();
     fclose(fp);
 }
 
