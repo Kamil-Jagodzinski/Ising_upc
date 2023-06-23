@@ -122,13 +122,10 @@ void runProgram(int rank, int num_procs, int grid_size, double J, double B, long
         
     }
 
+    // Cleanup
     upcxx::barrier();
     if(rank == 0){
-        std::cout << "Simulation finished" << std::endl;
-    }
-
-    // Cleanup
-    if(rank == 0){
         upcxx::delete_(myGlobalPtr);
+        std::cout << "Symulacja zakończona" << std::endl;
     }
 }
